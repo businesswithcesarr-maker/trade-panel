@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Trade panel</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:var(--tg-theme-bg-color,#ffffff);--text:var(--tg-theme-text-color,#111);
+  --hint:var(--tg-theme-hint-color,#8a8a8a);--card:var(--tg-theme-secondary-bg-color,#f3f3f3);
+  --btn:var(--tg-theme-button-color,#2f7d4f);--btnt:var(--tg-theme-button-text-color,#fff);
+  --line:color-mix(in srgb,var(--text) 14%,transparent);--red:#d64545;--green:#2e9d5b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+.wrap{padding:16px 16px 28px;max-width:520px;margin:0 auto}
+.card{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+h1{font-size:18px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--hint);font-size:14px}
+.math{background:var(--card);border-radius:12px;padding:12px 14px;margin-top:12px}
+.eq{font-family:ui-monospace,Menlo,monospace;font-size:14px;color:var(--hint)}
+.tot{font-size:22px;font-weight:700;margin:2px 0}
+.small{font-size:13px;color:var(--hint)}
+.row{display:grid;gap:8px;margin-top:10px}
+.two{grid-template-columns:1fr 1fr}.five{grid-template-columns:repeat(5,1fr)}
+button{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 6px;cursor:pointer}
+button.sel{border-color:var(--btn);background:color-mix(in srgb,var(--btn) 14%,var(--bg));font-weight:600}
+button.sell.sel{border-color:var(--red);background:color-mix(in srgb,var(--red) 12%,var(--bg))}
+button.buy.sel{border-color:var(--green);background:color-mix(in srgb,var(--green) 12%,var(--bg))}
+.inp{display:flex;gap:8px;margin-top:10px}
+input{flex:1;min-width:0;font:inherit;font-size:20px;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+input:focus{outline:2px solid var(--btn);border-color:transparent}
+.unit{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.unit button{border:0;border-radius:0;padding:0 14px}
+.err{color:var(--red);font-size:14px;min-height:20px;margin-top:6px}
+.go{width:100%;background:var(--btn);color:var(--btnt);border:0;font-weight:600;font-size:17px;padding:14px;margin-top:6px}
+.note{font-size:13px;color:var(--hint);text-align:center;margin-top:8px;min-height:18px}
+.live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1 id="head">Trade panel</h1>
+    <div id="now"></div>
+    <div class="sub" id="hist"></div>
+    <div class="math" id="math"></div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="row two">
+    <button class="sell" id="bSell">Sell</button>
+    <button class="buy" id="bBuy">Buy</button>
+  </div>
+  <div class="row five" id="chips"></div>
+
+  <div class="inp">
+    <input id="amt" inputmode="decimal" placeholder="Type an amount" autocomplete="off">
+    <div class="unit"><button id="uCoin" class="sel">XRP</button><button id="uUsd">$</button></div>
+  </div>
+
+  <button class="go" id="go">Open Coinbase</button>
+  <div class="note" id="note">Copies your amount, then opens Coinbase. Paste it in the Amount box.</div>
+  <div class="note">Nothing is bought or sold here. You confirm in Coinbase.</div>
+</div>
+
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const q = new URLSearchParams(location.hash.slice(1));
+const S = q.get("s") || "XRP";
+let price = +q.get("p") || 0;
+const own = +q.get("own") || 0, setAmt = +q.get("set") || 0, cash = +q.get("cash") || 0;
+const fee = q.has("fee") ? +q.get("fee") : 0.9, slug = q.get("slug"), chg = q.get("chg");
+let side = q.get("side") === "buy" ? "buy" : "sell", unit = "coin", amt = setAmt || 0, chip = setAmt ? "Your set" : "";
+const $ = id => document.getElementById(id);
+const money = n => "$" + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pm = n => n >= 10 ? money(n) : "$" + n.toLocaleString(undefined, {minimumFractionDigits: 3, maximumFractionDigits: 5});
+const qty = n => n >= 100 ? n.toLocaleString(undefined, {maximumFractionDigits: 2}) : n.toLocaleString(undefined, {maximumFractionDigits: 6});
+const plain = n => (+n.toFixed(n >= 100 ? 2 : 6)).toString();
+
+$("head").textContent = q.get("h") || (S + " trade panel");
+$("hist").textContent = q.get("hl") || "";
+$("uCoin").textContent = S;
+
+function chips() {
+  const list = side === "sell"
+    ? [...(setAmt ? [["Your set", setAmt]] : []), ...(own ? [["¼", own * .25], ["½", own * .5], ["¾", own * .75], ["All", own]] : [])]
+    : [["$100", 100 / price], ["$250", 250 / price], ["$500", 500 / price], ["$1k", 1000 / price], ...(cash ? [["Max", cash / price]] : [])];
+  const box = $("chips");
+  box.style.gridTemplateColumns = `repeat(${Math.max(1, list.length)},1fr)`;
+  box.innerHTML = "";
+  list.forEach(([label, v]) => {
+    const b = document.createElement("button");
+    b.textContent = label; if (label === chip) b.className = "sel";
+    b.onclick = () => { chip = label; amt = v; $("amt").value = ""; $("err").textContent = ""; haptic(); draw(); };
+    box.appendChild(b);
+  });
+  if (!list.length) box.innerHTML = `<div class="small" style="padding:4px 2px">Type an amount below.</div>`;
+}
+
+function draw() {
+  $("bSell").className = "sell" + (side === "sell" ? " sel" : "");
+  $("bBuy").className = "buy" + (side === "buy" ? " sel" : "");
+  $("uCoin").className = unit === "coin" ? "sel" : ""; $("uUsd").className = unit === "usd" ? "sel" : "";
+  $("now").innerHTML = `<span class="live"></span>${S} now <b>${price ? pm(price) : "…"}</b>` + (chg ? ` · 24h ${chg}%` : "");
+  $("go").textContent = slug ? `Open Coinbase · ${side === "sell" ? "Sell " + (amt ? qty(amt) + " " + S : "") : "Buy " + (amt && price ? money(amt * price) : "")}` : "Copy amount";
+  chips();
+  if (!(amt > 0) || !price) {
+    $("math").innerHTML = `<div class="small">Tap an amount or type one below.</div>` + holdLine();
+    return;
+  }
+  const gross = amt * price, f = gross * fee / 100, tot = side === "sell" ? gross - f : gross + f;
+  $("math").innerHTML =
+    `<div class="eq">${side === "sell" ? "Sell" : "Buy"} ${qty(amt)} ${S} × ${pm(price)} = ${money(gross)}</div>` +
+    `<div class="tot">${side === "sell" ? "You get about" : "You pay about"} ${money(tot)}</div>` +
+    `<div class="small">Includes ${fee}% Coinbase fee (≈ ${money(f)})</div>` + holdLine();
+  let warn = "";
+  if (side === "sell" && own && amt > own * 1.0001) warn = `You only own ${qty(own)} ${S}.`;
+  if (side === "buy" && cash && tot > cash * 1.0001) warn = `That's more than your ${money(cash)} buying cash.`;
+  $("err").textContent = warn;
+}
+function holdLine() {
+  return side === "sell"
+    ? (own ? `<div class="small">You own ${qty(own)} ${S}</div>` : "")
+    : (cash ? `<div class="small">Buying cash set aside: ${money(cash)}</div>` : "");
+}
+function haptic() { try { tg && tg.HapticFeedback.selectionChanged(); } catch (e) {} }
+
+$("amt").addEventListener("input", () => {
+  const raw = $("amt").value.replace(/,/g, "").trim();
+  let usd = unit === "usd";
+  if (raw.startsWith("$")) { usd = true; unit = "usd"; }
+  const n = parseFloat(raw.replace(/\$/g, ""));
+  chip = "";
+  amt = n > 0 && price ? (usd ? n / price : n) : 0;
+  $("err").textContent = "";
+  draw();
+});
+$("uCoin").onclick = () => { unit = "coin"; $("amt").dispatchEvent(new Event("input")); };
+$("uUsd").onclick = () => { unit = "usd"; $("amt").dispatchEvent(new Event("input")); };
+$("bSell").onclick = () => { side = "sell"; chip = setAmt ? "Your set" : ""; amt = setAmt || 0; $("amt").value = ""; haptic(); draw(); };
+$("bBuy").onclick = () => { side = "buy"; chip = ""; amt = 0; $("amt").value = ""; haptic(); draw(); };
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  try {
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t);
+    t.select(); const ok = document.execCommand("copy"); t.remove(); return ok;
+  } catch (e) { return false; }
+}
+$("go").onclick = async () => {
+  if (!(amt > 0)) { $("err").textContent = "Pick or type an amount first."; return; }
+  // Coinbase's sell box takes the coin amount; its buy box takes dollars.
+  const text = side === "sell" ? plain(amt) : (amt * price).toFixed(2);
+  const ok = await copy(text);
+  $("note").textContent = ok ? `Copied ${side === "sell" ? text + " " + S : "$" + text}. Paste it in Coinbase's Amount box.`
+                             : `Type ${side === "sell" ? text + " " + S : "$" + text} in Coinbase's Amount box.`;
+  try { tg && tg.HapticFeedback.notificationOccurred("success"); } catch (e) {}
+  if (slug) setTimeout(() => {
+    const url = "https://www.coinbase.com/price/" + slug;
+    if (tg && tg.openLink) tg.openLink(url); else window.open(url, "_blank");
+  }, 350);
+};
+
+async function live() {
+  if (q.get("stock")) return;
+  try {
+    const r = await fetch(`https://api.exchange.coinbase.com/products/${S}-USD/ticker`);
+    const d = await r.json();
+    if (d.price) {
+      const n = +d.price;
+      if ($("amt").value && unit === "usd") { price = n; $("amt").dispatchEvent(new Event("input")); return; }
+      price = n; draw();
+    }
+  } catch (e) {}
+}
+draw(); live(); setInterval(live, 5000);
+</script>
+</body>
+</html>
